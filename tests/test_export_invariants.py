@@ -5,7 +5,7 @@ import pandas as pd
 
 from deployment_audit.benchmark.manifest import build_benchmark_manifest
 from deployment_audit.evaluation.contract import RiskCoverageContract
-from deployment_audit.export.schema import AUDIT_CARD_SCHEMA, FAMILY_LADDER_SCHEMA
+from deployment_audit.export.schema import AUDIT_CARD_SCHEMA, FAMILY_LADDER_SCHEMA, get_schema
 from deployment_audit.export.tables import export_audit_card
 from deployment_audit.study.family_ladder import run_family_ladder
 
@@ -68,3 +68,9 @@ def test_family_ladder_summary_obeys_export_schema(tmp_path: Path) -> None:
     report = json.loads((tmp_path / "family_ladder" / "study_report.json").read_text(encoding="utf-8"))
     assert report["benchmark_source_kind"] == "benchmark_manifest"
     assert report["benchmark_source_path"] == str(manifest_path)
+
+
+def test_menu_audit_record_schema_is_registered() -> None:
+    schema = get_schema("menu_audit_record")
+    assert schema.name == "menu_audit_record"
+    assert {"menu_state", "audit_card", "export_summary"}.issubset(schema.columns)

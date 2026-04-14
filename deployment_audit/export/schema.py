@@ -107,6 +107,34 @@ FRONTIER_CHARACTERIZATION_SCHEMA = ExportSchema(
     ),
 )
 
+MENU_AUDIT_RECORD_SCHEMA = ExportSchema(
+    name="menu_audit_record",
+    columns=(
+        "benchmark_name",
+        "benchmark_version",
+        "benchmark_manifest_hash",
+        "family_name",
+        "family_version",
+        "score_name",
+        "contract_version",
+        "menu_state",
+        "selector_summary",
+        "witness_rows",
+        "witness_summary",
+        "chosen_policy_exposure_rows",
+        "exposure_summary",
+        "consequence_active",
+        "consequence_summary",
+        "frontier_warning_active",
+        "frontier_summary",
+        "primary_regime",
+        "trust_state",
+        "regime_labels",
+        "audit_card",
+        "export_summary",
+    ),
+)
+
 CORROBORATION_SCHEMA = ExportSchema(
     name="corroboration_summary",
     columns=COMMON_SUMMARY_COLUMNS,
@@ -131,6 +159,7 @@ SCHEMA_REGISTRY = {
     schema.name: schema
     for schema in [
         AUDIT_CARD_SCHEMA,
+        MENU_AUDIT_RECORD_SCHEMA,
         FAMILY_LADDER_SCHEMA,
         SCORE_COMPARISON_SCHEMA,
         NESTED_MENU_SCHEMA,
