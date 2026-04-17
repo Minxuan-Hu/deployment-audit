@@ -17,7 +17,7 @@ def register_study_subcommands(subparsers: argparse._SubParsersAction) -> None:
     family_parser.add_argument("--output-root", required=True)
     family_parser.add_argument("--backend", required=True, choices=["mock", "llm"])
     family_parser.add_argument("--backend-config")
-    family_parser.add_argument("--score-name", default="bin_margin")
+    family_parser.add_argument("--score-name", default="bin_score")
     family_parser.add_argument("--contract-version", default="risk_coverage_v1")
     family_parser.set_defaults(handler=_handle_family_ladder)
 
@@ -52,7 +52,7 @@ def register_study_subcommands(subparsers: argparse._SubParsersAction) -> None:
     corroboration_parser.add_argument("--output-root", required=True)
     corroboration_parser.add_argument("--backend", required=True, choices=["mock", "llm"])
     corroboration_parser.add_argument("--backend-config")
-    corroboration_parser.add_argument("--score-name", default="bin_margin")
+    corroboration_parser.add_argument("--score-name", default="bin_score")
     corroboration_parser.add_argument("--contract-version", default="risk_coverage_v1")
     corroboration_parser.set_defaults(handler=_handle_corroboration)
 

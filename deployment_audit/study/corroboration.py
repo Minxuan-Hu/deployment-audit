@@ -15,7 +15,7 @@ def run_corroboration(
     backend_name: str,
     output_root: str | Path,
     contract: RiskCoverageContract,
-    score_name: str = "bin_margin",
+    score_name: str = "bin_score",
     backend_config_path: str | Path | None = None,
 ) -> list[dict[str, object]]:
     output_root = Path(output_root)

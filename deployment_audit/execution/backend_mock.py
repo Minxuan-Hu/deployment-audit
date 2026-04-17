@@ -39,6 +39,7 @@ class MockBackend(BackendProtocol):
                 difficulty_tier=str(row.difficulty_tier),
                 route_score=route_score,
                 bin_margin=bin_margin,
+                bin_score=bin_score,
             )
             accuracy_probability = max(0.05, min(0.98, 0.82 - difficulty + family_bias + score_bias))
             accuracy_draw = self._stable_uniform(semantic_key + '|accuracy')

@@ -16,7 +16,7 @@ def run_family_ladder(
     output_root: str | Path,
     contract: RiskCoverageContract,
     benchmark_manifest_path: str,
-    score_name: str = "bin_margin",
+    score_name: str = "bin_score",
     backend_config_path: str | Path | None = None,
 ) -> list[dict[str, object]]:
     output_root = Path(output_root)
