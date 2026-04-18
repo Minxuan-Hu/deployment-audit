@@ -27,7 +27,7 @@ class MockBackend(BackendProtocol):
             "length_aware_evidence_threshold": 0.02,
             "length_aware_fastpath": 0.04,
         }[policy.family_name]
-        score_bias = 0.04 if policy.score_name == "bin_margin" else 0.0
+        score_bias = 0.04 if policy.score_name in {"bin_margin", "bin_score"} else 0.0
         for row in examples.itertuples(index=False):
             difficulty = (row.digits - 2) * 0.08 + (row.pad_words / 1024.0) * 0.18
             semantic_key = f"{benchmark_manifest.benchmark_name}|{policy.policy_id}|{row.example_id}"

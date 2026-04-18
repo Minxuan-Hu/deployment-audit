@@ -23,10 +23,10 @@ class HuggingFaceCausalLMConfig:
     device: str = "auto"
     dtype: str = "auto"
     trust_remote_code: bool = False
-    route_token_scale: int = 1024
     energy_mode: str = "latency_proxy"
     energy_coefficient_joules_per_ms: float = 0.001
     prompt_template_version: str = "solve_arithmetic_v1"
+    scoring_mode: str = "dual_channel_v1"
     generation_max_new_tokens: int = 16
 
     @classmethod
@@ -36,9 +36,6 @@ class HuggingFaceCausalLMConfig:
             raise ValueError(f"Unsupported llm adapter_type: {adapter_type}")
         if "model_name_or_path" not in payload:
             raise ValueError("LLM backend config must define model_name_or_path.")
-        route_token_scale = int(payload.get("route_token_scale", 1024))
-        if route_token_scale <= 0:
-            raise ValueError("route_token_scale must be positive.")
         energy_mode = str(payload.get("energy_mode", "latency_proxy"))
         if energy_mode != "latency_proxy":
             raise ValueError(f"Unsupported energy_mode: {energy_mode}")
@@ -51,16 +48,19 @@ class HuggingFaceCausalLMConfig:
         prompt_template_version = str(payload.get("prompt_template_version", "solve_arithmetic_v1"))
         if prompt_template_version != "solve_arithmetic_v1":
             raise ValueError(f"Unsupported prompt_template_version: {prompt_template_version}")
+        scoring_mode = str(payload.get("scoring_mode", "dual_channel_v1"))
+        if scoring_mode != "dual_channel_v1":
+            raise ValueError(f"Unsupported scoring_mode: {scoring_mode}")
         return cls(
             adapter_type=adapter_type,
             model_name_or_path=str(payload["model_name_or_path"]),
             device=str(payload.get("device", "auto")),
             dtype=str(payload.get("dtype", "auto")),
             trust_remote_code=bool(payload.get("trust_remote_code", False)),
-            route_token_scale=route_token_scale,
             energy_mode=energy_mode,
             energy_coefficient_joules_per_ms=energy_coefficient,
             prompt_template_version=prompt_template_version,
+            scoring_mode=scoring_mode,
             generation_max_new_tokens=generation_max_new_tokens,
         )
 
@@ -71,10 +71,10 @@ class HuggingFaceCausalLMConfig:
             "device": self.device,
             "dtype": self.dtype,
             "trust_remote_code": self.trust_remote_code,
-            "route_token_scale": self.route_token_scale,
             "energy_mode": self.energy_mode,
             "energy_coefficient_joules_per_ms": self.energy_coefficient_joules_per_ms,
             "prompt_template_version": self.prompt_template_version,
+            "scoring_mode": self.scoring_mode,
             "generation_max_new_tokens": self.generation_max_new_tokens,
         }
 
@@ -92,11 +92,12 @@ class LLMBackend(BackendProtocol):
 
     def __init__(self, config: HuggingFaceCausalLMConfig):
         self.config = config
-        self.version = f"{config.adapter_type}:{config.model_name_or_path}"
+        self.version = f"{config.adapter_type}:{config.model_name_or_path}:{config.scoring_mode}"
         self._tokenizer = None
         self._model = None
         self._torch = None
         self._device = None
+        self._binary_token_sets: dict[str, set[int]] | None = None
 
     def _load_runtime(self) -> None:
         if self._model is not None and self._tokenizer is not None:
@@ -143,13 +144,14 @@ class LLMBackend(BackendProtocol):
         self._device = device
         self._tokenizer = tokenizer
         self._model = model
+        self._binary_token_sets = self._build_binary_token_sets()
 
     def _padding_text(self, pad_words: int) -> str:
         if pad_words <= 0:
             return ""
         return " ".join(["context"] * pad_words)
 
-    def _build_prompt(self, row: pd.Series) -> str:
+    def _build_solve_prompt(self, row: pd.Series) -> str:
         if self.config.prompt_template_version != "solve_arithmetic_v1":
             raise ValueError(f"Unsupported prompt_template_version: {self.config.prompt_template_version}")
         operation_label = "sum" if str(row.operation_name) == "sum" else "product"
@@ -164,7 +166,45 @@ class LLMBackend(BackendProtocol):
             "Answer:"
         )
 
-    def _generate_answer(self, prompt: str) -> tuple[str, int, int, float]:
+    def _build_verify_prompt(self, row: pd.Series) -> str:
+        operation_text = "sum" if str(row.operation_name) == "sum" else "product"
+        operator = "+" if str(row.operation_name) == "sum" else "*"
+        padding_block = self._padding_text(int(row.pad_words))
+        return (
+            "You verify whether a proposed arithmetic answer is correct.\n"
+            f"Background context: {padding_block}\n"
+            f"Operation: {operation_text}\n"
+            f"Expression: {int(row.a)} {operator} {int(row.b)}\n"
+            f"Proposed answer: {int(row.candidate_answer)}\n"
+            "Output 1 if the proposed answer is exactly correct. Output 0 if it is incorrect.\n"
+            "Reply with only 0 or 1.\n"
+            "Answer:"
+        )
+
+    def _tokenizer_vocab_size(self) -> int:
+        assert self._tokenizer is not None
+        if hasattr(self._tokenizer, "__len__"):
+            return int(len(self._tokenizer))
+        vocab = self._tokenizer.get_vocab()
+        return max(int(token_id) for token_id in vocab.values()) + 1
+
+    def _build_binary_token_sets(self) -> dict[str, set[int]]:
+        assert self._tokenizer is not None
+        yes_ids: set[int] = set()
+        no_ids: set[int] = set()
+        vocab_size = self._tokenizer_vocab_size()
+        for token_id in range(vocab_size):
+            text = self._tokenizer.decode([token_id], skip_special_tokens=False)
+            stripped = text.strip()
+            if stripped == "1":
+                yes_ids.add(token_id)
+            elif stripped == "0":
+                no_ids.add(token_id)
+        if not yes_ids or not no_ids:
+            raise ValueError("Tokenizer must expose at least one token for both '0' and '1'.")
+        return {"yes": yes_ids, "no": no_ids}
+
+    def _generate_answer(self, prompt: str) -> tuple[str, int, int, float, float]:
         assert self._torch is not None and self._model is not None and self._tokenizer is not None and self._device is not None
         encoded = self._tokenizer(prompt, return_tensors="pt")
         encoded = {key: value.to(self._device) for key, value in encoded.items()}
@@ -174,17 +214,30 @@ class LLMBackend(BackendProtocol):
             "max_new_tokens": self.config.generation_max_new_tokens,
             "do_sample": False,
             "pad_token_id": self._tokenizer.pad_token_id,
+            "return_dict_in_generate": True,
+            "output_scores": True,
         }
         if self._tokenizer.eos_token_id is not None:
             generation_kwargs["eos_token_id"] = self._tokenizer.eos_token_id
         start_time = time.perf_counter()
         with self._torch.inference_mode():
-            output_ids = self._model.generate(**generation_kwargs)
+            generation_output = self._model.generate(**generation_kwargs)
         latency_ms = (time.perf_counter() - start_time) * 1000.0
+        output_ids = generation_output.sequences
         generated_ids = output_ids[0, prompt_token_count:]
         generated_text = self._tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
         answer_token_count = int(generated_ids.shape[-1])
-        return generated_text, prompt_token_count, answer_token_count, latency_ms
+        if answer_token_count == 0 or not generation_output.scores:
+            answer_confidence = 0.0
+        else:
+            log_probabilities: list[float] = []
+            for step_index, step_logits in enumerate(generation_output.scores[:answer_token_count]):
+                probabilities = step_logits[0].softmax(dim=-1)
+                token_id = int(generated_ids[step_index])
+                token_probability = max(float(probabilities[token_id]), 1e-12)
+                log_probabilities.append(math.log(token_probability))
+            answer_confidence = float(math.exp(sum(log_probabilities) / len(log_probabilities)))
+        return generated_text, prompt_token_count, answer_token_count, latency_ms, answer_confidence
 
     def _extract_first_integer(self, generated_text: str) -> int | None:
         match = re.search(r"-?\d+", generated_text)
@@ -192,24 +245,27 @@ class LLMBackend(BackendProtocol):
             return None
         return int(match.group(0))
 
-    def _score_candidate_agreement(
-        self,
-        candidate_answer: int,
-        generated_answer: int | None,
-        digits: int,
-    ) -> tuple[float, float, bool, float]:
-        if generated_answer is None:
-            return 0.5, 0.0, False, math.inf
-        distance_scale = float(max(1, 10 ** max(0, digits - 2)))
-        agreement_units = abs(float(candidate_answer) - float(generated_answer)) / distance_scale
-        bin_score = math.exp(-agreement_units)
-        bin_margin = abs((2.0 * bin_score) - 1.0)
-        predicted_yes = bin_score >= 0.5
-        return float(bin_score), float(bin_margin), bool(predicted_yes), float(agreement_units)
-
-    def _route_score(self, bin_margin: float, prompt_token_count: int) -> float:
-        length_score = max(0.0, 1.0 - min(1.0, prompt_token_count / float(self.config.route_token_scale)))
-        return max(0.0, min(1.0, 0.65 * bin_margin + 0.35 * length_score))
+    def _score_verification_prompt(self, prompt: str) -> tuple[float, float, bool]:
+        assert self._torch is not None and self._model is not None and self._tokenizer is not None and self._device is not None
+        assert self._binary_token_sets is not None
+        encoded = self._tokenizer(prompt, return_tensors="pt")
+        encoded = {key: value.to(self._device) for key, value in encoded.items()}
+        with self._torch.inference_mode():
+            output = self._model(**encoded)
+        next_token_logits = output.logits[0, -1, :]
+        probabilities = next_token_logits.softmax(dim=-1)
+        raw_yes = float(sum(float(probabilities[token_id]) for token_id in self._binary_token_sets["yes"]))
+        raw_no = float(sum(float(probabilities[token_id]) for token_id in self._binary_token_sets["no"]))
+        binary_mass = raw_yes + raw_no
+        if binary_mass <= 0.0:
+            probability_yes = 0.5
+            probability_no = 0.5
+        else:
+            probability_yes = raw_yes / binary_mass
+            probability_no = raw_no / binary_mass
+        bin_margin = abs(probability_yes - probability_no)
+        predicted_yes = probability_yes >= probability_no
+        return float(probability_yes), float(bin_margin), bool(predicted_yes)
 
     def _energy_joules(self, latency_ms: float) -> float:
         return latency_ms * self.config.energy_coefficient_joules_per_ms
@@ -224,15 +280,12 @@ class LLMBackend(BackendProtocol):
         records: list[ExecutionRecord] = []
         for row in examples.itertuples(index=False):
             row_series = pd.Series(row._asdict())
-            prompt = self._build_prompt(row_series)
-            generated_text, prompt_token_count, answer_token_count, latency_ms = self._generate_answer(prompt)
+            solve_prompt = self._build_solve_prompt(row_series)
+            generated_text, prompt_token_count, answer_token_count, latency_ms, answer_confidence = self._generate_answer(solve_prompt)
             generated_answer = self._extract_first_integer(generated_text)
-            bin_score, bin_margin, predicted_yes, agreement_units = self._score_candidate_agreement(
-                candidate_answer=int(row.candidate_answer),
-                generated_answer=generated_answer,
-                digits=int(row.digits),
-            )
-            route_score = self._route_score(bin_margin=bin_margin, prompt_token_count=prompt_token_count)
+            verify_prompt = self._build_verify_prompt(row_series)
+            bin_score, bin_margin, predicted_yes = self._score_verification_prompt(verify_prompt)
+            route_score = float(answer_confidence)
             accepted = policy.accepts(
                 pad_words=int(row.pad_words),
                 difficulty_tier=str(row.difficulty_tier),
@@ -266,9 +319,11 @@ class LLMBackend(BackendProtocol):
                         "pad_words": int(row.pad_words),
                         "difficulty_tier": str(row.difficulty_tier),
                         "prompt_template_version": self.config.prompt_template_version,
+                        "scoring_mode": self.config.scoring_mode,
                         "model_name_or_path": self.config.model_name_or_path,
                         "generated_answer": generated_answer,
-                        "agreement_units": None if math.isinf(agreement_units) else float(agreement_units),
+                        "answer_confidence": float(answer_confidence),
+                        "verification_probability_yes": float(bin_score),
                     },
                 )
             )
