@@ -19,10 +19,12 @@ def derive_regime_labels(witness_count: int, exposure_count: int, consequence_ac
 def derive_primary_regime(witness_count: int, exposure_count: int, consequence_active: bool, frontier_warning_active: bool, n_feasible: int) -> str:
     if n_feasible == 0:
         return "no_feasible_policies"
-    if consequence_active:
+    if consequence_active and exposure_count > 0:
         return "consequence_generating"
     if frontier_warning_active:
         return "frontier_warning"
+    if consequence_active:
+        return "consequence_generating"
     if exposure_count > 0:
         return "exposed_stable"
     if witness_count > 0:
