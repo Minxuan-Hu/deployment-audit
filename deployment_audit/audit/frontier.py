@@ -50,14 +50,14 @@ def detect_frontier_warning(
     if n_feasible <= 2:
         warning_reason = "thin_feasible_set"
         warning_active = True
-    elif energy_span < 0.15 and tail_span < 0.25:
-        warning_reason = "compressed_frontier"
-        warning_active = True
     elif selector_disagreement_count > 0 and any(
         gap_ratio is not None and gap_ratio <= 0.15 for gap_ratio in [mean_gap_ratio, tail_gap_ratio]
     ):
         warning_reason = "selector_boundary_conflict"
         warning_active = True
+    elif energy_span < 0.15 and tail_span < 0.25:
+        warning_reason = "compressed_frontier"
+        warning_active = False
     else:
         warning_reason = "stable_enough"
         warning_active = False

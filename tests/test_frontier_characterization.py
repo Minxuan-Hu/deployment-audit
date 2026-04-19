@@ -76,3 +76,47 @@ def test_frontier_characterization_aggregates_alternative_behavior() -> None:
     assert characterization["alternative_frontier_warning_change_rate"] == 0.5
     assert characterization["reference_witness_row_count"] == 10
     assert 0.0 <= characterization["mean_feasible_jaccard"] <= 1.0
+
+
+from deployment_audit.audit.frontier import detect_frontier_warning
+import pandas as pd
+
+
+def test_compressed_frontier_is_diagnostic_only_without_other_warning_signal() -> None:
+    summary_df = pd.DataFrame(
+        [
+            {"policy_id": "p1", "feasible": True, "mean_energy": 1.00, "tail_energy": 1.00},
+            {"policy_id": "p2", "feasible": True, "mean_energy": 1.08, "tail_energy": 1.03},
+            {"policy_id": "p3", "feasible": True, "mean_energy": 1.11, "tail_energy": 1.04},
+        ]
+    )
+    selector_summary = {
+        "mean_policy_id": "p1",
+        "tail_policy_id": "p1",
+        "confirmatory_policy_id": "p1",
+        "selector_unique_policy_count": 1,
+        "selectors_aligned": True,
+    }
+    warning_active, frontier_summary = detect_frontier_warning(summary_df, selector_summary=selector_summary)
+    assert warning_active is False
+    assert frontier_summary["warning_reason"] == "compressed_frontier"
+
+
+def test_selector_boundary_conflict_remains_warning() -> None:
+    summary_df = pd.DataFrame(
+        [
+            {"policy_id": "p1", "feasible": True, "mean_energy": 1.00, "tail_energy": 1.00},
+            {"policy_id": "p2", "feasible": True, "mean_energy": 1.01, "tail_energy": 1.01},
+            {"policy_id": "p3", "feasible": True, "mean_energy": 1.09, "tail_energy": 1.04},
+        ]
+    )
+    selector_summary = {
+        "mean_policy_id": "p1",
+        "tail_policy_id": "p2",
+        "confirmatory_policy_id": "p2",
+        "selector_unique_policy_count": 2,
+        "selectors_aligned": False,
+    }
+    warning_active, frontier_summary = detect_frontier_warning(summary_df, selector_summary=selector_summary)
+    assert warning_active is True
+    assert frontier_summary["warning_reason"] == "selector_boundary_conflict"
